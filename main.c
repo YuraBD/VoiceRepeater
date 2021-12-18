@@ -1,4 +1,4 @@
-/******************************************************************************
+	/******************************************************************************
 * File Name: main.c
 *
 * Description: This code example features a 5-segment CapSense slider and two
@@ -32,7 +32,7 @@
 * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. Cypress
 * reserves the right to make changes to the Software without notice. Cypress
 * does not assume any liability arising out of the application or use of the
-* Software or any prod_uct or circuit described in the Software. Cypress does
+* Software or any product or circuit described in the Software. Cypress does
 * not authorize its products for use in any products where a malfunction or
 * failure of the Cypress product may reasonably be expected to result in
 * significant property damage, injury or death ("High Risk Product"). By
@@ -50,12 +50,16 @@
 #include "cycfg_capsense.h"
 #include "led.h"
 
+
 /*******************************************************************************
 * Macros
 *******************************************************************************/
 #define CAPSENSE_INTR_PRIORITY      (7u)
 #define EZI2C_INTR_PRIORITY         (6u) /* EZI2C interrupt priority must be
                                           * higher than CapSense interrupt */
+#define SYNC_CLK_HERZ               (8000u)
+#define RECORD_TIME                 (10u)
+#define NUM_SAMPLES                 (SYNC_CLK_HERZ * RECORD_TIME)
 
 /*******************************************************************************
 * Function Prototypes
@@ -68,7 +72,11 @@ static void capsense_callback();
 void handle_error(void);
 void VoiceRecorder_Record();
 void VoiceRecorder_Play();
-void VoiceRecorder_Sync();
+static uint32_t initialize_tcpwm(void);
+static void tcpwm_isr(void);
+static uint32_t initialize_csdadc(void);
+static void CSDADC_Interrupt(void);
+static uint32_t initialize_csdidac(void);
 
 /*******************************************************************************
 * Global Variables
@@ -78,6 +86,25 @@ cyhal_ezi2c_t sEzI2C;
 cyhal_ezi2c_slave_cfg_t sEzI2C_sub_cfg;
 cyhal_ezi2c_cfg_t sEzI2C_cfg;
 volatile bool capsense_scan_complete = false;
+cyhal_pwm_t pwm_sync;
+volatile bool record = false;
+volatile uint16 buffer[NUM_SAMPLES];
+cy_stc_csdadc_context_t cy_csdadc_context;
+volatile bool isWorking = false;
+cy_stc_csdidac_context_t cy_csdidac_context;
+volatile uint32 curr;
+
+const cy_stc_sysint_t CSDADC_ISR_cfg =
+    {
+        .intrSrc = csd_interrupt_IRQn,  /* Interrupt source is the CSD interrupt */
+        .intrPriority = 7u,             /* Interrupt priority is 7 */
+    };
+
+const cy_stc_sysint_t CapSense_interrupt_config =
+        {
+            .intrSrc = CYBSP_CSD_IRQ,
+            .intrPriority = CAPSENSE_INTR_PRIORITY,
+        };
 
 /*******************************************************************************
 * Function Name: handle_error
@@ -119,7 +146,7 @@ int main(void)
     cy_rslt_t result;
 
     /* Initialize the device and board peripherals */
-    result = cybsp_init();                               // board support package
+    result = cybsp_init();
 
     /* Board init failed. Stop program execution */
     if (result != CY_RSLT_SUCCESS)
@@ -140,9 +167,32 @@ int main(void)
         CY_ASSERT(0);
     }
 
+    result = initialize_csdadc();
+    if (CYRET_SUCCESS != result)
+    {
+        CY_ASSERT(0);
+    }
+
+    result = initialize_tcpwm();
+    if (CYRET_SUCCESS != result)
+    {
+        CY_ASSERT(0);
+    }
+
+    result = initialize_csdidac();
+    if (CYRET_SUCCESS != result)
+    {
+        CY_ASSERT(0);
+    }
+
+    Cy_CapSense_Restore(&cy_capsense_context);
+    Cy_SysInt_Init(&CapSense_interrupt_config, &capsense_isr);
     /* Initiate first scan */
     Cy_CapSense_ScanAllWidgets(&cy_capsense_context);
 
+    static led_data_t led_data = {LED_ON, LED_MAX_BRIGHTNESS};
+    led_data.state = LED_OFF;
+    update_led_state(&led_data);
     for (;;)
     {
         if (capsense_scan_complete)
@@ -154,8 +204,7 @@ int main(void)
             process_touch();
 
             /* Establishes synchronized operation between the CapSense
-             * middleware and the CapSense Tuner tool.
-             */
+             * middleware and the CapSense Tuner tool. */
             Cy_CapSense_RunTuner(&cy_capsense_context);
 
             /* Initiate next scan */
@@ -169,21 +218,61 @@ int main(void)
 }
 
 
+
 void VoiceRecorder_Record()
 {
-    VoiceRecorder_Sync();
+    uint32 i;
+    record = true;
+
+    Cy_CapSense_Save(&cy_capsense_context);
+
+    Cy_CSDADC_Restore(&cy_csdadc_context);
+    Cy_SysInt_Init(&CSDADC_ISR_cfg, &CSDADC_Interrupt);
+
+    Cy_TCPWM_TriggerStart_Single(TCPWM1, 0);
+
+    for (i = 0; i < NUM_SAMPLES; i++)
+     {
+        while (CY_CSDADC_SUCCESS != Cy_CSDADC_IsEndConversion(&cy_csdadc_context) || isWorking == false)
+        {
+            /* Waits for the end of conversions. */
+        }
+        buffer[i] = (uint16) Cy_CSDADC_GetResult(0, &cy_csdadc_context);
+        isWorking = false;
+    }
+
+    Cy_TCPWM_TriggerStopOrKill_Single(TCPWM1, 0);
+
+    Cy_CSDADC_Save(&cy_csdadc_context);
+
+    Cy_CapSense_Restore(&cy_capsense_context);
+    Cy_SysInt_Init(&CapSense_interrupt_config, &capsense_isr);
 }
 
 
 void VoiceRecorder_Play()
 {
-    VoiceRecorder_Sync();
+    record = false;
+    curr = 0;
+    Cy_CapSense_Save(&cy_capsense_context);
+    Cy_CSDIDAC_Restore(&cy_csdidac_context);
+
+    Cy_TCPWM_TriggerStart_Single(TCPWM1, 0);
+
+    while (curr < NUM_SAMPLES)
+    {
+        //wait
+    }
+
+    Cy_CSDIDAC_OutputDisable(CY_CSDIDAC_AB, &cy_csdidac_context);
+
+    Cy_TCPWM_TriggerStopOrKill_Single(TCPWM1, 0);
+
+    Cy_CSDIDAC_Save(&cy_csdidac_context);
+    Cy_CapSense_Restore(&cy_capsense_context);
+    Cy_SysInt_Init(&CapSense_interrupt_config, &capsense_isr);
 }
 
-void VoiceRecorder_Sync()
-{
-
-}
 /*******************************************************************************
 * Function Name: process_touch
 ********************************************************************************
@@ -196,14 +285,13 @@ static void process_touch(void)
 {
     uint32_t button0_status;
     uint32_t button1_status;
-    cy_stc_capsense_touch_t *slider_touch_info;
-    uint16_t slider_pos;
-    uint8_t slider_touch_status;
-    bool led_update_req = false;
+//    cy_stc_capsense_touch_t *slider_touch_info;
+//    uint16_t slider_pos;
+//    uint8_t slider_touch_status;
 
     static uint32_t button0_status_prev;
     static uint32_t button1_status_prev;
-    static uint16_t slider_pos_prev;
+//    static uint16_t slider_pos_prev;
     static led_data_t led_data = {LED_ON, LED_MAX_BRIGHTNESS};
 
     /* Get button 0 status */
@@ -218,49 +306,56 @@ static void process_touch(void)
         CY_CAPSENSE_BUTTON1_SNS0_ID,
         &cy_capsense_context);
 
-    /* Get slider status */
-    slider_touch_info = Cy_CapSense_GetTouchInfo(
-        CY_CAPSENSE_LINEARSLIDER0_WDGT_ID, &cy_capsense_context);
-    slider_touch_status = slider_touch_info->numPosition;
-    slider_pos = slider_touch_info->ptrPosition->x;
+//    /* Get slider status */
+//    slider_touch_info = Cy_CapSense_GetTouchInfo(
+//        CY_CAPSENSE_LINEARSLIDER0_WDGT_ID, &cy_capsense_context);
+//    slider_touch_status = slider_touch_info->numPosition;
+//    slider_pos = slider_touch_info->ptrPosition->x;
 
-    // * Detect new touch on Button0 */
+    /* Detect new touch on Button0 */
     if ((0u != button0_status) &&
         (0u == button0_status_prev))
     {
         led_data.state = LED_ON;
-        led_update_req = true;
+        update_led_state(&led_data);
+//        led_update_req = true;
         VoiceRecorder_Record();
+        led_data.state = LED_OFF;
+        update_led_state(&led_data);
+
     }
 
-    // * Detect new touch on Button1 */
+    /* Detect new touch on Button1 */
     if ((0u != button1_status) &&
         (0u == button1_status_prev))
     {
-        led_data.state = LED_OFF;
-        led_update_req = true;
+        led_data.state = LED_ON;
+        update_led_state(&led_data);
+//        led_update_req = true;
         VoiceRecorder_Play();
+        led_data.state = LED_OFF;
+        update_led_state(&led_data);
     }
 
     /* Detect the new touch on slider */
-    if ((0 != slider_touch_status) &&
-        (slider_pos != slider_pos_prev))
-    {
-        led_data.brightness = (slider_pos * 100)
-                / cy_capsense_context.ptrWdConfig[CY_CAPSENSE_LINEARSLIDER0_WDGT_ID].xResolution;
-        led_update_req = true;
-    }
+//    if ((0 != slider_touch_status) &&
+//        (slider_pos != slider_pos_prev))
+//    {
+//        led_data.brightness = (slider_pos * 100)
+//                / cy_capsense_context.ptrWdConfig[CY_CAPSENSE_LINEARSLIDER0_WDGT_ID].xResolution;
+//        led_update_req = true;
+//    }
 
     /* Update the LED state if requested */
-    if (led_update_req)
-    {
-        update_led_state(&led_data);
-    }
+//    if (led_update_req)
+//    {
+//        update_led_state(&led_data);
+//    }
 
     /* Update previous touch status */
     button0_status_prev = button0_status;
     button1_status_prev = button1_status;
-    slider_pos_prev = slider_pos;
+//    slider_pos_prev = slider_pos;
 }
 
 /*******************************************************************************
@@ -276,11 +371,7 @@ static uint32_t initialize_capsense(void)
     uint32_t status = CYRET_SUCCESS;
 
     /* CapSense interrupt configuration */
-    const cy_stc_sysint_t CapSense_interrupt_config =
-        {
-            .intrSrc = CYBSP_CSD_IRQ,
-            .intrPriority = CAPSENSE_INTR_PRIORITY,
-        };
+
 
     /* Capture the CSD HW block and initialize it to the default state. */
     status = Cy_CapSense_Init(&cy_capsense_context);
@@ -309,8 +400,90 @@ static uint32_t initialize_capsense(void)
         return status;
     }
 
+    Cy_CapSense_Save(&cy_capsense_context);
+
     return status;
 }
+
+
+static uint32_t initialize_csdadc(void)
+{
+    uint32_t status = CYRET_SUCCESS;
+
+
+    /* Capture the CSD HW block and initialize it to the default state. */
+    status = Cy_CSDADC_Init(&CYBSP_CSD_csdadc_config, &cy_csdadc_context);
+    if (CYRET_SUCCESS != status)
+    {
+        return status;
+    }
+
+    /* Initialize CapSense interrupt */
+    Cy_SysInt_Init(&CSDADC_ISR_cfg, &CSDADC_Interrupt);
+    NVIC_ClearPendingIRQ(CSDADC_ISR_cfg.intrSrc);
+    NVIC_EnableIRQ(CSDADC_ISR_cfg.intrSrc);
+
+    /* Initialize the CapSense firmware modules. */
+    status = Cy_CSDADC_Enable(&cy_csdadc_context);
+    if (CYRET_SUCCESS != status)
+    {
+        return status;
+    }
+
+    Cy_CSDADC_Save(&cy_csdadc_context);
+
+    return status;
+}
+
+
+static uint32_t initialize_csdidac(void)
+{
+    uint32_t status = CYRET_SUCCESS;
+
+
+    /* Capture the CSD HW block and initialize it to the default state. */
+    status = Cy_CSDIDAC_Init(&CYBSP_CSD_csdidac_config, &cy_csdidac_context);
+    if (CYRET_SUCCESS != status)
+    {
+        return status;
+    }
+
+    Cy_CSDIDAC_Save(&cy_csdidac_context);
+
+    return status;
+}
+
+
+
+static uint32_t initialize_tcpwm(void)
+{
+    uint32_t status = CYRET_SUCCESS;
+
+    /* CapSense interrupt configuration */
+    const cy_stc_sysint_t TCPWM_interrupt_config =
+        {
+            .intrSrc = tcpwm_1_cnt_0_IRQ,
+            .intrPriority = CAPSENSE_INTR_PRIORITY,
+        };
+
+    /* Capture the CSD HW block and initialize it to the default state. */
+    status = Cy_TCPWM_Counter_Init(TCPWM1, 0, &tcpwm_1_cnt_0_config);
+    if (CYRET_SUCCESS != status)
+    {
+        return status;
+    }
+
+    /* Initialize CapSense interrupt */
+    Cy_SysInt_Init(&TCPWM_interrupt_config, tcpwm_isr);
+    NVIC_ClearPendingIRQ(TCPWM_interrupt_config.intrSrc);
+    NVIC_EnableIRQ(TCPWM_interrupt_config.intrSrc);
+
+    /* Initialize the CapSense firmware modules. */
+    Cy_TCPWM_Counter_Enable(TCPWM1, 0);
+
+    return status;
+}
+
 
 /*******************************************************************************
 * Function Name: capsense_isr
@@ -323,6 +496,33 @@ static void capsense_isr(void)
 {
     Cy_CapSense_InterruptHandler(CYBSP_CSD_HW, &cy_capsense_context);
 }
+
+
+static void CSDADC_Interrupt(void)
+{
+    Cy_CSDADC_InterruptHandler(CYBSP_CSD_HW, &cy_csdadc_context);
+}
+
+// void *callback_arg, cyhal_pwm_event_t event
+static void tcpwm_isr(void)
+{
+    uint32_t interrupts = Cy_TCPWM_GetInterruptStatusMasked(TCPWM1, 0);
+
+    if (record)
+    {
+        Cy_CSDADC_StartConvert(CY_CSDADC_SINGLE_SHOT, 1, &cy_csdadc_context);
+        isWorking = true;
+    }
+    else
+    {
+        Cy_CSDIDAC_OutputEnable(CY_CSDIDAC_AB, buffer[curr], &cy_csdidac_context);
+        curr++;
+
+    }
+    Cy_TCPWM_ClearInterrupt(TCPWM1, 0, interrupts);
+
+}
+
 
 /*******************************************************************************
 * Function Name: capsense_callback()
