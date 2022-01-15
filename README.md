@@ -10,3 +10,6 @@ Authors: <mark>[Yurii Bodakovskyi](https://github.com/YuraBD), [Bogdan Bryk](htt
 > cd VoiceRepeater
 > make getlibs
 ```
+## Prerequirements
+- PSoC 6 Wi-Fi BT Prototyping Kit (CY8CPROTO-062-4343W):
+
