@@ -21,3 +21,5 @@ Authors: <mark>[Yurii Bodakovskyi](https://github.com/YuraBD), [Bogdan Bryk](htt
 ![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-04-27.png)
 - final version  
 ![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-59.png)
+## How to connect everything
+![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-27-43.png)
