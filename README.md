@@ -11,5 +11,13 @@ Authors: <mark>[Yurii Bodakovskyi](https://github.com/YuraBD), [Bogdan Bryk](htt
 > make getlibs
 ```
 ## Prerequirements
-- PSoC 6 Wi-Fi BT Prototyping Kit (CY8CPROTO-062-4343W):
-
+- PSoC 6 Wi-Fi BT Prototyping Kit (CY8CPROTO-062-4343W)  
+![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-35.png)
+- microphone and amplifier  
+![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-43.png)
+- dynamic 4 Om  
+![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-51.png)
+- two resistors of 2kOm; Ceramic Capacitor: 15 nF  
+![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-04-27.png)
+- final version  
+![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-59.png)
