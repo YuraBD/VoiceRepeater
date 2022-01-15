@@ -15,9 +15,9 @@ Authors: <mark>[Yurii Bodakovskyi](https://github.com/YuraBD), [Bogdan Bryk](htt
 ![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-35.png)
 - microphone and amplifier  
 ![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-43.png)
-- dynamic 4 Om  
+- speaker 4 Ohm  
 ![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-51.png)
-- two resistors of 2kOm; Ceramic Capacitor: 15 nF  
+- two resistors of 2kOhm; Ceramic Capacitor: 15 nF  
 ![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-04-27.png)
 - final version  
 ![](https://github.com/YuraBD/VoiceRepeater/blob/main/images/Screenshot%20from%202022-01-15%2016-03-59.png)
