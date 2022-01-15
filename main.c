@@ -1,44 +1,7 @@
-	/******************************************************************************
+/******************************************************************************
 * File Name: main.c
 *
-* Description: This code example features a 5-segment CapSense slider and two
-*              CapSense buttons. Button 0 turns the LED ON, Button 1 turns the
-*              LED OFF and the slider controls the brightness of the LED. The
-*              code example also features interfacing with Tuner GUI using I2C
-*              interface.
-*
-* Related Document: See README.md
-*
-*******************************************************************************
-* (c) 2019-2020, Cypress Semiconductor Corporation. All rights reserved.
-*******************************************************************************
-* This software, including source code, documentation and related materials
-* ("Software"), is owned by Cypress Semiconductor Corporation or one of its
-* subsidiaries ("Cypress") and is protected by and subject to worldwide patent
-* protection (United States and foreign), United States copyright laws and
-* international treaty provisions. Therefore, you may use this Software only
-* as provided in the license agreement accompanying the software package from
-* which you obtained this Software ("EULA").
-*
-* If no EULA applies, Cypress hereby grants you a personal, non-exclusive,
-* non-transferable license to copy, modify, and compile the Software source
-* code solely for use in connection with Cypress's integrated circuit products.
-* Any reproduction, modification, translation, compilation, or representation
-* of this Software except as specified above is prohibited without the express
-* written permission of Cypress.
-*
-* Disclaimer: THIS SOFTWARE IS PROVIDED AS-IS, WITH NO WARRANTY OF ANY KIND,
-* EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, NONINFRINGEMENT, IMPLIED
-* WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE. Cypress
-* reserves the right to make changes to the Software without notice. Cypress
-* does not assume any liability arising out of the application or use of the
-* Software or any product or circuit described in the Software. Cypress does
-* not authorize its products for use in any products where a malfunction or
-* failure of the Cypress product may reasonably be expected to result in
-* significant property damage, injury or death ("High Risk Product"). By
-* including Cypress's product in a High Risk Product, the manufacturer of such
-* system or application assumes all risk of such use and in doing so agrees to
-* indemnify Cypress against all liability.
+* Description: This is the main file of Voice Repeater project.
 *******************************************************************************/
 
 /*******************************************************************************
@@ -60,6 +23,8 @@
 #define SYNC_CLK_HERZ               (8000u)
 #define RECORD_TIME                 (10u)
 #define NUM_SAMPLES                 (SYNC_CLK_HERZ * RECORD_TIME)
+#define ADC_MAX_VALUE               ((1ul << 10u) - 1)
+#define COEFF                       (CY_CSDIDAC_MAX_CURRENT_NA / ADC_MAX_VALUE)
 
 /*******************************************************************************
 * Function Prototypes
@@ -134,8 +99,11 @@ void handle_error(void)
 *  System entrance point. This function performs
 *  - initial setup of device
 *  - initialize CapSense
+*  - initialize CSDADC
+*  - initialize CSDIDAC
+*  - initialize time counter
 *  - initialize tuner communication
-*  - scan touch input continuously and update the LED accordingly.
+*  - scan touch input continuously.
 *
 * Return:
 *  int
@@ -218,7 +186,18 @@ int main(void)
 }
 
 
-
+/*******************************************************************************
+* Function Name: VoiceRecorder_Record
+********************************************************************************
+* Summary:
+*  This function performs
+*  - writing digital values of input analog signal
+*    from the microphone to the buffer.
+*
+* Return:
+*  void
+*
+*******************************************************************************/
 void VoiceRecorder_Record()
 {
     uint32 i;
@@ -231,6 +210,7 @@ void VoiceRecorder_Record()
 
     Cy_TCPWM_TriggerStart_Single(TCPWM1, 0);
 
+    isWorking = false;
     for (i = 0; i < NUM_SAMPLES; i++)
      {
         while (CY_CSDADC_SUCCESS != Cy_CSDADC_IsEndConversion(&cy_csdadc_context) || isWorking == false)
@@ -249,7 +229,17 @@ void VoiceRecorder_Record()
     Cy_SysInt_Init(&CapSense_interrupt_config, &capsense_isr);
 }
 
-
+/*******************************************************************************
+* Function Name: VoiceRecorder_Play
+********************************************************************************
+* Summary:
+*  This function performs
+*  - plays the recorded sample from a buffer using tcpwm_isr.
+*
+* Return:
+*  void
+*
+*******************************************************************************/
 void VoiceRecorder_Play()
 {
     record = false;
@@ -277,17 +267,17 @@ void VoiceRecorder_Play()
 * Function Name: process_touch
 ********************************************************************************
 * Summary:
-*  Gets the details of touch position detected, processes the touch input
-*  and updates the LED status.
+*  processes the touch input, updates the LED status, calls the functions
+*  VoiceRecorder_Record, VoiceRecorder_Play.
+*
+* Return:
+*  void
 *
 *******************************************************************************/
 static void process_touch(void)
 {
     uint32_t button0_status;
     uint32_t button1_status;
-//    cy_stc_capsense_touch_t *slider_touch_info;
-//    uint16_t slider_pos;
-//    uint8_t slider_touch_status;
 
     static uint32_t button0_status_prev;
     static uint32_t button1_status_prev;
@@ -306,11 +296,6 @@ static void process_touch(void)
         CY_CAPSENSE_BUTTON1_SNS0_ID,
         &cy_capsense_context);
 
-//    /* Get slider status */
-//    slider_touch_info = Cy_CapSense_GetTouchInfo(
-//        CY_CAPSENSE_LINEARSLIDER0_WDGT_ID, &cy_capsense_context);
-//    slider_touch_status = slider_touch_info->numPosition;
-//    slider_pos = slider_touch_info->ptrPosition->x;
 
     /* Detect new touch on Button0 */
     if ((0u != button0_status) &&
@@ -318,7 +303,6 @@ static void process_touch(void)
     {
         led_data.state = LED_ON;
         update_led_state(&led_data);
-//        led_update_req = true;
         VoiceRecorder_Record();
         led_data.state = LED_OFF;
         update_led_state(&led_data);
@@ -331,31 +315,14 @@ static void process_touch(void)
     {
         led_data.state = LED_ON;
         update_led_state(&led_data);
-//        led_update_req = true;
         VoiceRecorder_Play();
         led_data.state = LED_OFF;
         update_led_state(&led_data);
     }
 
-    /* Detect the new touch on slider */
-//    if ((0 != slider_touch_status) &&
-//        (slider_pos != slider_pos_prev))
-//    {
-//        led_data.brightness = (slider_pos * 100)
-//                / cy_capsense_context.ptrWdConfig[CY_CAPSENSE_LINEARSLIDER0_WDGT_ID].xResolution;
-//        led_update_req = true;
-//    }
-
-    /* Update the LED state if requested */
-//    if (led_update_req)
-//    {
-//        update_led_state(&led_data);
-//    }
-
     /* Update previous touch status */
     button0_status_prev = button0_status;
     button1_status_prev = button1_status;
-//    slider_pos_prev = slider_pos;
 }
 
 /*******************************************************************************
@@ -406,6 +373,14 @@ static uint32_t initialize_capsense(void)
 }
 
 
+/*******************************************************************************
+* Function Name: initialize_csdadc
+********************************************************************************
+* Summary:
+*  This function initializes the CSDADC and configure the CSDADC
+*  interrupt.
+*
+*******************************************************************************/
 static uint32_t initialize_csdadc(void)
 {
     uint32_t status = CYRET_SUCCESS;
@@ -418,12 +393,11 @@ static uint32_t initialize_csdadc(void)
         return status;
     }
 
-    /* Initialize CapSense interrupt */
+    /* Initialize CSDADC interrupt */
     Cy_SysInt_Init(&CSDADC_ISR_cfg, &CSDADC_Interrupt);
     NVIC_ClearPendingIRQ(CSDADC_ISR_cfg.intrSrc);
     NVIC_EnableIRQ(CSDADC_ISR_cfg.intrSrc);
 
-    /* Initialize the CapSense firmware modules. */
     status = Cy_CSDADC_Enable(&cy_csdadc_context);
     if (CYRET_SUCCESS != status)
     {
@@ -435,7 +409,13 @@ static uint32_t initialize_csdadc(void)
     return status;
 }
 
-
+/*******************************************************************************
+* Function Name: initialize_csdidac
+********************************************************************************
+* Summary:
+*  This function initializes the CSDIDAC.
+*
+*******************************************************************************/
 static uint32_t initialize_csdidac(void)
 {
     uint32_t status = CYRET_SUCCESS;
@@ -454,12 +434,18 @@ static uint32_t initialize_csdidac(void)
 }
 
 
-
+/*******************************************************************************
+* Function Name: initialize_tcpwm
+********************************************************************************
+* Summary:
+*  This function initializes the time counter.
+*
+*******************************************************************************/
 static uint32_t initialize_tcpwm(void)
 {
     uint32_t status = CYRET_SUCCESS;
 
-    /* CapSense interrupt configuration */
+    /* TCPWM interrupt configuration */
     const cy_stc_sysint_t TCPWM_interrupt_config =
         {
             .intrSrc = tcpwm_1_cnt_0_IRQ,
@@ -473,12 +459,11 @@ static uint32_t initialize_tcpwm(void)
         return status;
     }
 
-    /* Initialize CapSense interrupt */
+    /* Initialize TCPWM interrupt */
     Cy_SysInt_Init(&TCPWM_interrupt_config, tcpwm_isr);
     NVIC_ClearPendingIRQ(TCPWM_interrupt_config.intrSrc);
     NVIC_EnableIRQ(TCPWM_interrupt_config.intrSrc);
 
-    /* Initialize the CapSense firmware modules. */
     Cy_TCPWM_Counter_Enable(TCPWM1, 0);
 
     return status;
@@ -498,12 +483,27 @@ static void capsense_isr(void)
 }
 
 
+/*******************************************************************************
+* Function Name: CSDADC_Interrupt
+********************************************************************************
+* Summary:
+*  This function handles CSDADC interrupt.
+*
+*******************************************************************************/
 static void CSDADC_Interrupt(void)
 {
     Cy_CSDADC_InterruptHandler(CYBSP_CSD_HW, &cy_csdadc_context);
 }
 
-// void *callback_arg, cyhal_pwm_event_t event
+/*******************************************************************************
+* Function Name: tcpwm_isr
+********************************************************************************
+* Summary:
+*  This function handles time counter interrupt. Converts analog
+*  signal to digital while recording. Plays the sample from buffer
+*  while playing.
+*
+*******************************************************************************/
 static void tcpwm_isr(void)
 {
     uint32_t interrupts = Cy_TCPWM_GetInterruptStatusMasked(TCPWM1, 0);
@@ -515,7 +515,7 @@ static void tcpwm_isr(void)
     }
     else
     {
-        Cy_CSDIDAC_OutputEnable(CY_CSDIDAC_AB, buffer[curr], &cy_csdidac_context);
+        Cy_CSDIDAC_OutputEnable(CY_CSDIDAC_AB, buffer[curr] * COEFF, &cy_csdidac_context);
         curr++;
 
     }
